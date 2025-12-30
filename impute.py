@@ -1,12 +1,8 @@
-# BaseEstimator provides default implementations for parameter management, including set_params and get_params methods
-# TransformerMixin provides a default fit_transfirm method, which combines fit and transform, aligning with sklearn's expectations for transformers
 from sklearn.base import BaseEstimator, TransformerMixin
 import pandas as pd
 import logging
 
 logger = logging.getLogger(__name__)
-
-# Individual imputers for a single column - one for numeric, one for categorical
 
 class GroupedMedianImputer(BaseEstimator, TransformerMixin):
     """
@@ -63,7 +59,7 @@ class GroupedMostFrequentImputer(BaseEstimator, TransformerMixin):
         """
         logger.info(f"Fitting GroupedMostFrequentImputer for '{self.impute_col}' grouped by '{self.group_col}'")
         df = X.copy() if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
-        self.group_modes_ = df.groupby(self.group_col)[self.impute_col].agg(lambda x: x.mode().iloc[0] if not x.mode().empty else None).to_dict() # for each grup, give most common value, otherwisse give me None
+        self.group_modes_ = df.groupby(self.group_col)[self.impute_col].agg(lambda x: x.mode().iloc[0] if not x.mode().empty else None).to_dict()
         self.global_mode_ = df[self.impute_col].mode().iloc[0]
 
         logger.debug(f"Computed group modes for {len(self.group_modes_)} groups")
@@ -83,11 +79,10 @@ class GroupedMostFrequentImputer(BaseEstimator, TransformerMixin):
         return df
 
 
-# Wrapper applies imputers to multiple numeric and categorical columns
 class GroupwiseImputer(BaseEstimator, TransformerMixin):
     """
     Wrapper that applies grouped imputers to multiple columns.
-    Automatically selectes GroupedMedianImputer for numeric col
+    Automatically selects GroupedMedianImputer for numeric col
     and GroupedMostFrequentImputer for categorical col
     """
     def __init__(self, group_col, numeric_cols = None, categorical_cols = None):
@@ -99,10 +94,11 @@ class GroupwiseImputer(BaseEstimator, TransformerMixin):
 
     def fit(self, X, y = None):
         """
-        Gits groupwise imputers for each specified column
+        Gets groupwise imputers for each specified column
         """
         logger.info("Fitting GroupwiseImputer")
         df = X.copy() if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+        assert self.group_col in X.columns
 
         # Fit numeric imputers
         self._num_imputers = {
@@ -132,7 +128,3 @@ class GroupwiseImputer(BaseEstimator, TransformerMixin):
         for col, imp in self._cat_imputers.items():
             df = imp.transform(df)
         return df
-
-
-
-    

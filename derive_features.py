@@ -1,6 +1,3 @@
-# Custom transformer to derive additional features for the crop yield model
-# Transformer follows the sklearn pattern: fit + transform
-
 from sklearn.base import BaseEstimator, TransformerMixin
 import pandas as pd
 import numpy as np
@@ -12,11 +9,10 @@ class DerivedFeaturesTransformer(BaseEstimator, TransformerMixin):
     """
     Transformer for deriving new features:
     - Numeric features: soil_quality_score, temp_optimality, ca_mg_ratio
-    - Categorical featrue: gdd_suitability
+    - Categorical feature: gdd_suitability
     """
 
     def __init__(self):
-        # Names of new features
         self.new_numeric_ = ['soil_quality_score', 'temp_optimality', 'ca_mg_ratio']
         self.new_categorical_ = ['gdd_suitability']
 
@@ -45,7 +41,6 @@ class DerivedFeaturesTransformer(BaseEstimator, TransformerMixin):
             mg_vals = X['mg_nh4_ph_7']
             gdd = X['growing_degree_days']
 
-            # Deriving Numeric Features
             X['soil_quality_score'] = ph_vals + cec_vals + clay_vals
             X['temp_optimality'] = np.maximum(0, 1 - np.abs(avg_temps - 22.0) / 22.0)
             X['ca_mg_ratio'] = np.where(mg_vals > 0, ca_vals / mg_vals, 5.0)
@@ -53,8 +48,6 @@ class DerivedFeaturesTransformer(BaseEstimator, TransformerMixin):
             commodity = commodity.fillna('CORN')
             X['commodity_desc'] = commodity
 
-            # Derive Categorical Features
-            # Growing degree day suitability per crop
             gdd_ranges = {
                 'CORN' : (1000, 2000),
                 'SOYBEANS' : (1200, 1800),
@@ -70,7 +63,7 @@ class DerivedFeaturesTransformer(BaseEstimator, TransformerMixin):
                     return 'Optimal' if low <= row['growing_degree_days'] <= high else 'Suboptimal'
                 return 'Suboptimal'
 
-            X['gdd_suitability'] = X.apply(check_gdd_suitability, axis = 1) # applying among columns
+            X['gdd_suitability'] = X.apply(check_gdd_suitability, axis = 1)
 
             logger.info("Feature derivation completed successfully")
             return X        

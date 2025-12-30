@@ -4,32 +4,46 @@
 """
 Crop Yield Prediction Pipeline
 ------------------------------
-This script connects to Supabase to retrieve weather, soil chemical, and physical 
-data, matches them with historical crop yields, and trains a Random Forest 
-regressor using a preprocessing pipeline with imputation and derived features.
+Connects to Supabase to retrieve weather, soil chemical, and physical data, 
+matches soil samples with historical crop yields using approximate spatial 
+and temporal heuristics, and trains a Random Forest regressor using a 
+scikit-learn pipeline with group-aware imputation and cross-validation.
+
+Assumes:
+- Soil samples are independent by pedlabsampnum
+- State-level spatial matching is a coarse proxy (to be refined later)
 """
 
-# Imports
-import pandas as pd
+# NOTE (v1):
+# Multiple yield rows may correspond to the same soil sample (pedlabsampnum)
+# Observations are therefore not independent
+# All splitting and CV is grouped by pedlabsampnum to prevent leakage
+# Reported performance metrics should be interpreted as optimistic
+
+import os
+import json
+import logging
+import warnings
+from datetime import datetime
+
 import numpy as np
+import pandas as pd
 from dotenv import load_dotenv
 from supabase import create_client
-import os
-import logging
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import (
+    train_test_split,
+    GroupKFold, 
+    GroupShuffleSplit,
+    GridSearchCV
+)
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import GridSearchCV
-import pickle
-import json
-from datetime import datetime
+
 from impute import GroupedMedianImputer, GroupedMostFrequentImputer, GroupwiseImputer
 from derive_features import DerivedFeaturesTransformer
-import warnings
 
 warnings.filterwarnings("ignore", category = RuntimeWarning)
 
@@ -46,15 +60,17 @@ class WeatherBasedModelTrainer:
     """
 
     def __init__(self):
+        """
+        Initializes Supabase connection, feature definitions, and
+        model-related state.
+        """
         logger.info("Initializing WeatherBasedModelTrainer")
         load_dotenv()
-        # Connect to supabase using credentials stored in .env
         self.supabase = create_client(os.getenv('SUPABASE_URL'), os.getenv('SUPABASE_KEY'))
         self.label_encoders = {}
         self.scaler = StandardScaler()
         self.model = None
 
-        # Define numeric and categorical feature lists
         self.numeric_features = [
         'sample_year', 'sample_latitude', 'sample_longitude',
         'avg_temperature', 'max_temperature', 'min_temperature',
@@ -70,25 +86,25 @@ class WeatherBasedModelTrainer:
         'climate_region', 'commodity_desc'
        ]
 
-    # Data Fetching
     def get_weather_and_soil_data(self):
         """
         Fetches weather, soil chemical, and soil physical property data from Supabase
         and merges them into a singlee dataframe.
+
+        Notes:
+        - Uses left joins to preserve weather records even if lab data is missing
+        - Chemical and physical data tables may be sparse or incomplete
         """
 
         try:
-            # Get all weather records
             logger.info("Fetching Weather Data From Supabase")
             weather_response = self.supabase.table('weather_soil_samples').select('*').execute()
             weather_df = pd.DataFrame(weather_response.data)
             logger.info(f"Found {len(weather_df)} weather records")
             
-            # Get soil sample numbers for joining
             sample_nums = weather_df['pedlabsampnum'].tolist()
             logger.info(f"Preparing {len(sample_nums)} sample numbers for merging soil properties")
             
-            # Get chemical properties and select relevant columns
             logger.info("Fetching chemical soil properties")
             chem_response = self.supabase.table('ssurgo_lab_chemical_properties').select('*').execute()
             
@@ -103,7 +119,6 @@ class WeatherBasedModelTrainer:
                 'mg_nh4_ph_7', 'k_nh4_ph_7', 'na_nh4_ph_7']
             chem_df = initial_chem_df[selected_chem_columns]
             
-            # Get physical properties
             logger.info("Fetching physical soil properties")
             phys_response = self.supabase.table('ssurgo_lab_physical_properties').select('*').execute()
 
@@ -117,7 +132,6 @@ class WeatherBasedModelTrainer:
                 logger.info(f"Retrieved {len(initial_phys_df)} physical property records")
             phys_df = initial_phys_df[selected_phys_columns]
             
-            # Merge DataFrames
             if not chem_df.empty:
                 merged_df = weather_df.merge(chem_df, left_on='pedlabsampnum', right_on='labsampnum', how='left')
                 logger.info(f"Joined {len(chem_df)} chemical property records")
@@ -135,17 +149,20 @@ class WeatherBasedModelTrainer:
             return pd.DataFrame()
 
 
-    # Crop Matching
     def match_with_crop_yields(self, enhanced_df):
         """
-        Matcches soil-weather records with historical crop records from Supabase using 
+        Matches soil-weather records with historical crop records from Supabase using 
         approximate spatial (state boundaries) and temporal matching.
         """
-
+        # TODO (v2):
+        # - Replace bounding boxes with true state polygons
+        # - Resolve overlapping state regions
+        # - Reduce geographic misclassification near borders
+        # - Prevent error amplification from misassigned states
+        
         logger.info("Matching with crop yields using expanded coverage...")
         
         try:
-            # Get crop yield data
             crop_response = self.supabase.table('nass_crops').select(
                 'commodity_desc, year, value, state_name, county_name, unit_desc'
             ).eq('statisticcat_desc', 'YIELD').in_(
@@ -156,18 +173,20 @@ class WeatherBasedModelTrainer:
                 logger.error("No crop data found")
                 return pd.DataFrame()
 
-            # Convert to DataFrame
             if hasattr(crop_response, 'data') and crop_response.data:
                 crop_df = pd.DataFrame(crop_response.data)
             else:
                 crop_df = pd.DataFrame()
             logger.info(f"Retrieved {len(crop_df)} crop yield records")
             
-            # Clean crop yields
             crop_df['yield_value'] = pd.to_numeric(
                 crop_df['value'].astype(str).str.replace(',', '').str.replace(r'[^0-9.]', '', regex=True),
                 errors='coerce'
-            )
+                )
+            invalid_years = crop_df[crop_df['year'].isna()]
+            logger.info(f"invalid years: {invalid_years}")
+            crop_df['year'] = pd.to_numeric(crop_df['year'], errors = 'coerce')
+            crop_df = crop_df[crop_df['year'].notna()].copy()
             
             crop_df = crop_df[
                 (crop_df['yield_value'].notna()) & 
@@ -176,74 +195,119 @@ class WeatherBasedModelTrainer:
             ].copy()
             logger.info(f"Filtered crop yields, {len(crop_df)} valid records remaining")
             
-            # Defining state boundaries
             state_boundaries = {
-                'ALABAMA': {'lat_range': (30.2, 35.0), 'lon_range': (-88.5, -84.9)},
-                'ARIZONA': {'lat_range': (31.3, 37.0), 'lon_range': (-114.8, -109.0)},
-                'ARKANSAS': {'lat_range': (33.0, 36.5), 'lon_range': (-94.6, -89.6)},
-                'CALIFORNIA': {'lat_range': (32.5, 42.0), 'lon_range': (-124.4, -114.1)},
-                'COLORADO': {'lat_range': (37.0, 41.0), 'lon_range': (-109.1, -102.0)},
-                'FLORIDA': {'lat_range': (24.5, 31.0), 'lon_range': (-87.6, -80.0)},
-                'GEORGIA': {'lat_range': (30.4, 35.0), 'lon_range': (-85.6, -80.8)},
-                'IDAHO': {'lat_range': (42.0, 49.0), 'lon_range': (-117.2, -111.0)},
-                'ILLINOIS': {'lat_range': (37.0, 42.5), 'lon_range': (-91.5, -87.0)},
-                'INDIANA': {'lat_range': (37.8, 41.8), 'lon_range': (-88.1, -84.8)},
-                'IOWA': {'lat_range': (40.4, 43.5), 'lon_range': (-96.6, -90.1)},
-                'KANSAS': {'lat_range': (37.0, 40.0), 'lon_range': (-102.1, -94.6)},
-                'KENTUCKY': {'lat_range': (36.5, 39.1), 'lon_range': (-89.6, -81.9)},
-                'LOUISIANA': {'lat_range': (28.9, 33.0), 'lon_range': (-94.0, -88.8)},
-                'MICHIGAN': {'lat_range': (41.7, 48.2), 'lon_range': (-90.4, -82.4)},
-                'MINNESOTA': {'lat_range': (43.5, 49.4), 'lon_range': (-97.2, -89.5)},
-                'MISSOURI': {'lat_range': (36.0, 40.6), 'lon_range': (-95.8, -89.1)},
-                'MONTANA': {'lat_range': (45.0, 49.0), 'lon_range': (-116.1, -104.0)},
-                'NEBRASKA': {'lat_range': (40.0, 43.0), 'lon_range': (-104.1, -95.3)},
-                'NORTH DAKOTA': {'lat_range': (45.9, 49.0), 'lon_range': (-104.1, -96.6)},
-                'OHIO': {'lat_range': (38.4, 41.9), 'lon_range': (-84.8, -80.5)},
-                'OKLAHOMA': {'lat_range': (33.6, 37.0), 'lon_range': (-103.0, -94.4)},
-                'SOUTH DAKOTA': {'lat_range': (42.5, 45.9), 'lon_range': (-104.1, -96.4)},
-                'TEXAS': {'lat_range': (25.8, 36.5), 'lon_range': (-106.6, -93.5)},
-                'WISCONSIN': {'lat_range': (42.5, 47.1), 'lon_range': (-92.9, -86.8)}
+                'ALABAMA': {'lat_range': (30.1, 35.1), 'lon_range': (-88.6, -84.8)},
+                'ALASKA': {'lat_range': (51.2, 71.5), 'lon_range': (-179.2, -129.9)},
+                'ARIZONA': {'lat_range': (31.2, 37.1), 'lon_range': (-114.9, -108.9)},
+                'ARKANSAS': {'lat_range': (32.8, 36.6), 'lon_range': (-94.7, -89.4)},
+                'CALIFORNIA': {'lat_range': (32.4, 42.1), 'lon_range': (-124.6, -114.0)},
+                'COLORADO': {'lat_range': (36.9, 41.1), 'lon_range': (-109.2, -101.9)},
+                'CONNECTICUT': {'lat_range': (40.9, 42.1), 'lon_range': (-73.8, -71.7)},
+                'DELAWARE': {'lat_range': (38.3, 39.9), 'lon_range': (-75.8, -74.9)},
+                'FLORIDA': {'lat_range': (24.3, 31.1), 'lon_range': (-87.8, -79.8)},
+                'GEORGIA': {'lat_range': (30.3, 35.1), 'lon_range': (-85.7, -80.7)},
+                'HAWAII': {'lat_range': (18.8, 22.4), 'lon_range': (-160.5, -154.5)},
+                'IDAHO': {'lat_range': (41.9, 49.1), 'lon_range': (-117.3, -110.8)},
+                'ILLINOIS': {'lat_range': (36.9, 42.6), 'lon_range': (-91.6, -87.0)},
+                'INDIANA': {'lat_range': (37.7, 41.9), 'lon_range': (-88.2, -84.7)},
+                'IOWA': {'lat_range': (40.3, 43.6), 'lon_range': (-96.7, -90.0)},
+                'KANSAS': {'lat_range': (36.9, 40.1), 'lon_range': (-102.2, -94.5)},
+                'KENTUCKY': {'lat_range': (36.4, 39.2), 'lon_range': (-89.7, -81.8)},
+                'LOUISIANA': {'lat_range': (28.8, 33.1), 'lon_range': (-94.1, -88.7)},
+                'MAINE': {'lat_range': (42.9, 47.5), 'lon_range': (-71.2, -66.8)},
+                'MARYLAND': {'lat_range': (37.8, 39.8), 'lon_range': (-79.6, -75.0)},
+                'MASSACHUSETTS': {'lat_range': (41.2, 42.9), 'lon_range': (-73.6, -69.9)},
+                'MICHIGAN': {'lat_range': (41.6, 48.3), 'lon_range': (-90.5, -82.3)},
+                'MINNESOTA': {'lat_range': (43.4, 49.5), 'lon_range': (-97.3, -89.3)},
+                'MISSISSIPPI': {'lat_range': (30.1, 35.1), 'lon_range': (-91.7, -88.0)},
+                'MISSOURI': {'lat_range': (35.9, 40.7), 'lon_range': (-95.9, -89.0)},
+                'MONTANA': {'lat_range': (44.3, 49.1), 'lon_range': (-116.2, -103.9)},
+                'NEBRASKA': {'lat_range': (39.9, 43.1), 'lon_range': (-104.2, -95.2)},
+                'NEVADA': {'lat_range': (35.0, 42.1), 'lon_range': (-120.1, -114.0)},
+                'NEW HAMPSHIRE': {'lat_range': (42.7, 45.4), 'lon_range': (-72.6, -70.6)},
+                'NEW JERSEY': {'lat_range': (38.8, 41.4), 'lon_range': (-75.6, -73.8)},
+                'NEW MEXICO': {'lat_range': (31.2, 37.1), 'lon_range': (-109.2, -102.9)},
+                'NEW YORK': {'lat_range': (40.4, 45.1), 'lon_range': (-79.9, -71.7)},
+                'NORTH CAROLINA': {'lat_range': (33.7, 36.6), 'lon_range': (-84.4, -75.4)},
+                'NORTH DAKOTA': {'lat_range': (45.8, 49.1), 'lon_range': (-104.2, -96.5)},
+                'OHIO': {'lat_range': (38.3, 42.0), 'lon_range': (-84.9, -80.4)},
+                'OKLAHOMA': {'lat_range': (33.5, 37.1), 'lon_range': (-103.1, -94.3)},
+                'OREGON': {'lat_range': (41.9, 46.4), 'lon_range': (-124.7, -116.4)},
+                'PENNSYLVANIA': {'lat_range': (39.7, 42.4), 'lon_range': (-80.6, -74.5)},
+                'RHODE ISLAND': {'lat_range': (41.1, 42.0), 'lon_range': (-71.9, -71.1)},
+                'SOUTH CAROLINA': {'lat_range': (32.0, 35.3), 'lon_range': (-83.6, -78.4)},
+                'SOUTH DAKOTA': {'lat_range': (42.4, 46.0), 'lon_range': (-104.2, -96.3)},
+                'TENNESSEE': {'lat_range': (34.9, 36.8), 'lon_range': (-90.4, -81.6)},
+                'TEXAS': {'lat_range': (25.7, 36.6), 'lon_range': (-106.7, -93.3)},
+                'UTAH': {'lat_range': (36.9, 42.1), 'lon_range': (-114.2, -109.0)},
+                'VERMONT': {'lat_range': (42.7, 45.1), 'lon_range': (-73.5, -71.4)},
+                'VIRGINIA': {'lat_range': (36.5, 39.5), 'lon_range': (-83.7, -75.2)},
+                'WASHINGTON': {'lat_range': (45.5, 49.1), 'lon_range': (-124.9, -116.8)},
+                'WEST VIRGINIA': {'lat_range': (37.1, 40.7), 'lon_range': (-82.8, -77.7)},
+                'WISCONSIN': {'lat_range': (42.4, 47.3), 'lon_range': (-93.0, -86.7)},
+                'WYOMING': {'lat_range': (40.9, 45.1), 'lon_range': (-111.1, -104.0)}
             }
-            
+
             matched_records = []
-            # Normalizing state and county names
-            # Only filtering by state here, as the data is sparce
+            crop_df = crop_df[crop_df['state_name'].notna()].copy()
+
+            dropped = crop_df['state_name'].isna().sum()
+            logger.info(f"Dropped {dropped} crop rows with missing state_name")
+
             crop_df['state_name'] = crop_df['state_name'].str.upper().str.strip()
             crop_df['county_name'] = crop_df['county_name'].str.upper().str.strip()
+
+            logger.info(
+                f"Crop states available ({crop_df['state_name'].nunique()}): "
+                f"{sorted(crop_df['state_name'].unique())[:10]} ..."
+            )
+            no_state_count = 0
             
-            # Match each soil record with a corresponding yield record
+
+            logger.info(f"Upper bound for enhanced iterrows: {len(enhanced_df)}")
+
             for _, soil_row in enhanced_df.iterrows():
                 try:
                     lat = float(soil_row['sample_latitude'])
                     lon = float(soil_row['sample_longitude'])
-                    soil_year = soil_row['sample_year']
+                    soil_year = int(soil_row['sample_year'])
+
+                    if soil_year is None:
+                        continue
                     
-                    # Find matching state
                     soil_state = None
                     for state, bounds in state_boundaries.items():
                         lat_min, lat_max = bounds['lat_range']
                         lon_min, lon_max = bounds['lon_range']
+
                         if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
                             soil_state = state
                             break
                     
                     if not soil_state:
+                        no_state_count += 1
                         continue
                     
-                    # Match crop yields within +- 1 year of soil sample
                     matching_crops = crop_df[
                         (crop_df['state_name'] == soil_state) &
-                        (crop_df['year'].between(soil_year - 1, soil_year + 1))
+                        (crop_df['year'] <= soil_year) &
+                        (crop_df['year'] >= soil_year -1)
                     ]
 
-                    # Fallback: pick the closest year if none match directly
                     if matching_crops.empty:
-                        state_crops = crop_df[crop_df['state_name'] == soil_state]
-                        if not state_crops.empty:
-                            closest_idx = (state_crops['year'] - soil_year).abs().idxmin()
-                            matching_crops = state_crops.loc[[closest_idx]] # double brackets returns a df instead of series
-                        
-                    # Combine soil and crop data into samples
+                        past_crops = crop_df[
+                            (crop_df['state_name'] == soil_state)&
+                            (crop_df['year'] <= soil_year)
+                        ]
+                        if not past_crops.empty:
+                            closest_idx = (soil_year - past_crops['year']).abs().idxmin()
+                            matching_crops = past_crops.loc[[closest_idx]]
+
+                    # Potential problem here because the same soil sample may be matched with multiple rows
+                    # Same soil/weather features but different commodities and different yields
+                    # Technically not a leak but does cause dependency leakage across CV folds
+                    # The same soil sample may appear in both training and validation
+                    # Called sample duplication leackage, weakens the validity of cv estimates
                     for _, crop_row in matching_crops.iterrows():
                         matched_record = {
                             **soil_row.to_dict(),
@@ -265,6 +329,7 @@ class WeatherBasedModelTrainer:
                 if 'state_name' not in self.categorical_features:
                     self.categorical_features.append('state_name')
                 logger.info(f"Successfully matched {len(matched_df)} training records")
+                logger.info(f"Soil samples with no inferred state: {no_state_count}")
                 return matched_df
             else:
                 logger.warning("No matches found")
@@ -275,7 +340,6 @@ class WeatherBasedModelTrainer:
             return pd.DataFrame()
     
 
-    # Pipeline Assembly
     def build_pipeline(self):
         """
         Assembles a preprocessing + modeling pipeline with:
@@ -331,10 +395,20 @@ class WeatherBasedModelTrainer:
         logger.info("Splitting data into train/test sets")
         X = df[self.numeric_features + self.categorical_features]
         y = df['yield_value']
+        groups = df['pedlabsampnum']
 
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size = 0.2, random_state = 42
-        )
+        # Group-aware train-test split to prevent soil sample leakage
+        gss = GroupShuffleSplit(test_size = 0.2, random_state = 42)
+        train_idx, test_idx = next(gss.split(X, y, groups))
+
+        X_train = X.iloc[train_idx]
+        y_train = y.iloc[train_idx]
+
+        X_test = X.iloc[test_idx]
+        y_test = y.iloc[test_idx]
+
+        assert set(groups.iloc[train_idx]).isdisjoint(set(groups.iloc[test_idx]))
+
         logger.info(f"Train size: {len(X_train)}, Test size: {len(X_test)}")
 
         pipeline = self.build_pipeline()
@@ -347,16 +421,23 @@ class WeatherBasedModelTrainer:
         }
 
         logger.info("Starting grid search for hyperparameter tuning")
+
+        cv = GroupKFold(n_splits = 5)
         grid = GridSearchCV(
             estimator = pipeline,
             param_grid = param_grid, 
-            cv = 5,
+            cv = cv,
             n_jobs =-1,
             scoring = "r2",
-            verbose = 2
+            verbose = 1
         )
 
-        grid.fit(X_train, y_train)
+        grid.fit(
+            X_train, 
+            y_train, 
+            groups = groups.iloc[train_idx]
+        )
+
         logger.info(f"Best params: {grid.best_params_}")
         logger.info(f"Best CV Score (R^2): {grid.best_score_:.4}")
 
@@ -373,7 +454,11 @@ class WeatherBasedModelTrainer:
 
 # Main Pipeline Runner
 def main():
-    """Executes full end-to-end training pipeline."""
+    """
+    Executes full end-to-end training pipeline.
+    
+    Fails fast if any upstream data dependency is missing.
+    """
     logger.info("Starting full training pipeline")
     trainer = WeatherBasedModelTrainer()
     
