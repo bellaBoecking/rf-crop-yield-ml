@@ -9,12 +9,17 @@ matches soil samples with historical crop yields using approximate spatial
 and temporal heuristics, and trains a Random Forest regressor using a 
 scikit-learn pipeline with group-aware imputation and cross-validation.
 
+v1.1 Updates:
+- Improved logging for crop matching and filtering invalid data
+- Introduced use of GeoPandas for state polygon spatial joins
+- Added dependency on Shapely for geometric operations (Point objects)
+
 Assumes:
 - Soil samples are independent by pedlabsampnum
 - State-level spatial matching is a coarse proxy (to be refined later)
 """
 
-# NOTE (v1):
+# NOTE (v1.1):
 # Multiple yield rows may correspond to the same soil sample (pedlabsampnum)
 # Observations are therefore not independent
 # All splitting and CV is grouped by pedlabsampnum to prevent leakage
@@ -25,6 +30,7 @@ import json
 import logging
 import warnings
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -41,9 +47,15 @@ from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
+import geopandas as gpd
+from shapely.geometry import Point
 
 from impute import GroupedMedianImputer, GroupedMostFrequentImputer, GroupwiseImputer
 from derive_features import DerivedFeaturesTransformer
+
+BASE_DIR = Path(__file__).resolve().parent
+STATE_SHIP = BASE_DIR / "states" / "tl_2025_us_state.shp"
+states = gpd.read_file(STATE_SHIP)
 
 warnings.filterwarnings("ignore", category = RuntimeWarning)
 
@@ -89,7 +101,7 @@ class WeatherBasedModelTrainer:
     def get_weather_and_soil_data(self):
         """
         Fetches weather, soil chemical, and soil physical property data from Supabase
-        and merges them into a singlee dataframe.
+        and merges them into a single dataframe.
 
         Notes:
         - Uses left joins to preserve weather records even if lab data is missing
@@ -149,16 +161,64 @@ class WeatherBasedModelTrainer:
             return pd.DataFrame()
 
 
+    def load_state_polygons(self):
+        """
+        Loads TIGER state polygons, normalizes state names, and converts data into a
+        lat/lon format for soil sample matching. Cached after first load.
+        """
+        if hasattr(self, "_state_gdf"):
+            return self._state_gdf
+        logger.info("Loading TIGER state polygons")
+
+        BASE_DIR = Path(__file__).resolve().parent
+        STATE_SHP = BASE_DIR / "states" / "tl_2025_us_state.shp"
+        states = gpd.read_file(STATE_SHP)
+
+        states = states.to_crs(epsg = 4326) 
+
+        states['state_name'] = states["NAME"].str.upper().str.strip()
+        self._state_gdf = states[["state_name", "geometry"]]
+        return self._state_gdf
+
+
+    def assign_states_to_soil_samples(self, df):
+        """
+        Assigns state_name to soil sample using TIGER state polygons.
+        """
+        logger.info("Assigning states using TIGER polygons")
+        
+        states = self.load_state_polygons()
+
+        soil_gdf = gpd.GeoDataFrame(
+            df.copy(),
+            geometry = gpd.points_from_xy(
+                df['sample_longitude'],
+                df['sample_latitude']
+            ),
+            crs = "EPSG:4326" 
+        )
+
+        joined = gpd.sjoin(
+            soil_gdf, 
+            states, 
+            how = 'left', 
+            predicate = 'within'
+        )
+
+        missing = joined["state_name"].isna().sum()
+        logger.info(f"Soil samples with no matched state {missing}")
+
+        joined = joined.drop(columns = ['geometry', 'index_right'])
+
+        return pd.DataFrame(joined)
+
+        
+
     def match_with_crop_yields(self, enhanced_df):
         """
         Matches soil-weather records with historical crop records from Supabase using 
         approximate spatial (state boundaries) and temporal matching.
         """
-        # TODO (v2):
-        # - Replace bounding boxes with true state polygons
-        # - Resolve overlapping state regions
-        # - Reduce geographic misclassification near borders
-        # - Prevent error amplification from misassigned states
         
         logger.info("Matching with crop yields using expanded coverage...")
         
@@ -175,8 +235,10 @@ class WeatherBasedModelTrainer:
 
             if hasattr(crop_response, 'data') and crop_response.data:
                 crop_df = pd.DataFrame(crop_response.data)
+                logger.info(crop_df.columns.to_list())
             else:
                 crop_df = pd.DataFrame()
+                logger.error("Crop responce does not exist!")
             logger.info(f"Retrieved {len(crop_df)} crop yield records")
             
             crop_df['yield_value'] = pd.to_numeric(
@@ -195,64 +257,11 @@ class WeatherBasedModelTrainer:
             ].copy()
             logger.info(f"Filtered crop yields, {len(crop_df)} valid records remaining")
             
-            state_boundaries = {
-                'ALABAMA': {'lat_range': (30.1, 35.1), 'lon_range': (-88.6, -84.8)},
-                'ALASKA': {'lat_range': (51.2, 71.5), 'lon_range': (-179.2, -129.9)},
-                'ARIZONA': {'lat_range': (31.2, 37.1), 'lon_range': (-114.9, -108.9)},
-                'ARKANSAS': {'lat_range': (32.8, 36.6), 'lon_range': (-94.7, -89.4)},
-                'CALIFORNIA': {'lat_range': (32.4, 42.1), 'lon_range': (-124.6, -114.0)},
-                'COLORADO': {'lat_range': (36.9, 41.1), 'lon_range': (-109.2, -101.9)},
-                'CONNECTICUT': {'lat_range': (40.9, 42.1), 'lon_range': (-73.8, -71.7)},
-                'DELAWARE': {'lat_range': (38.3, 39.9), 'lon_range': (-75.8, -74.9)},
-                'FLORIDA': {'lat_range': (24.3, 31.1), 'lon_range': (-87.8, -79.8)},
-                'GEORGIA': {'lat_range': (30.3, 35.1), 'lon_range': (-85.7, -80.7)},
-                'HAWAII': {'lat_range': (18.8, 22.4), 'lon_range': (-160.5, -154.5)},
-                'IDAHO': {'lat_range': (41.9, 49.1), 'lon_range': (-117.3, -110.8)},
-                'ILLINOIS': {'lat_range': (36.9, 42.6), 'lon_range': (-91.6, -87.0)},
-                'INDIANA': {'lat_range': (37.7, 41.9), 'lon_range': (-88.2, -84.7)},
-                'IOWA': {'lat_range': (40.3, 43.6), 'lon_range': (-96.7, -90.0)},
-                'KANSAS': {'lat_range': (36.9, 40.1), 'lon_range': (-102.2, -94.5)},
-                'KENTUCKY': {'lat_range': (36.4, 39.2), 'lon_range': (-89.7, -81.8)},
-                'LOUISIANA': {'lat_range': (28.8, 33.1), 'lon_range': (-94.1, -88.7)},
-                'MAINE': {'lat_range': (42.9, 47.5), 'lon_range': (-71.2, -66.8)},
-                'MARYLAND': {'lat_range': (37.8, 39.8), 'lon_range': (-79.6, -75.0)},
-                'MASSACHUSETTS': {'lat_range': (41.2, 42.9), 'lon_range': (-73.6, -69.9)},
-                'MICHIGAN': {'lat_range': (41.6, 48.3), 'lon_range': (-90.5, -82.3)},
-                'MINNESOTA': {'lat_range': (43.4, 49.5), 'lon_range': (-97.3, -89.3)},
-                'MISSISSIPPI': {'lat_range': (30.1, 35.1), 'lon_range': (-91.7, -88.0)},
-                'MISSOURI': {'lat_range': (35.9, 40.7), 'lon_range': (-95.9, -89.0)},
-                'MONTANA': {'lat_range': (44.3, 49.1), 'lon_range': (-116.2, -103.9)},
-                'NEBRASKA': {'lat_range': (39.9, 43.1), 'lon_range': (-104.2, -95.2)},
-                'NEVADA': {'lat_range': (35.0, 42.1), 'lon_range': (-120.1, -114.0)},
-                'NEW HAMPSHIRE': {'lat_range': (42.7, 45.4), 'lon_range': (-72.6, -70.6)},
-                'NEW JERSEY': {'lat_range': (38.8, 41.4), 'lon_range': (-75.6, -73.8)},
-                'NEW MEXICO': {'lat_range': (31.2, 37.1), 'lon_range': (-109.2, -102.9)},
-                'NEW YORK': {'lat_range': (40.4, 45.1), 'lon_range': (-79.9, -71.7)},
-                'NORTH CAROLINA': {'lat_range': (33.7, 36.6), 'lon_range': (-84.4, -75.4)},
-                'NORTH DAKOTA': {'lat_range': (45.8, 49.1), 'lon_range': (-104.2, -96.5)},
-                'OHIO': {'lat_range': (38.3, 42.0), 'lon_range': (-84.9, -80.4)},
-                'OKLAHOMA': {'lat_range': (33.5, 37.1), 'lon_range': (-103.1, -94.3)},
-                'OREGON': {'lat_range': (41.9, 46.4), 'lon_range': (-124.7, -116.4)},
-                'PENNSYLVANIA': {'lat_range': (39.7, 42.4), 'lon_range': (-80.6, -74.5)},
-                'RHODE ISLAND': {'lat_range': (41.1, 42.0), 'lon_range': (-71.9, -71.1)},
-                'SOUTH CAROLINA': {'lat_range': (32.0, 35.3), 'lon_range': (-83.6, -78.4)},
-                'SOUTH DAKOTA': {'lat_range': (42.4, 46.0), 'lon_range': (-104.2, -96.3)},
-                'TENNESSEE': {'lat_range': (34.9, 36.8), 'lon_range': (-90.4, -81.6)},
-                'TEXAS': {'lat_range': (25.7, 36.6), 'lon_range': (-106.7, -93.3)},
-                'UTAH': {'lat_range': (36.9, 42.1), 'lon_range': (-114.2, -109.0)},
-                'VERMONT': {'lat_range': (42.7, 45.1), 'lon_range': (-73.5, -71.4)},
-                'VIRGINIA': {'lat_range': (36.5, 39.5), 'lon_range': (-83.7, -75.2)},
-                'WASHINGTON': {'lat_range': (45.5, 49.1), 'lon_range': (-124.9, -116.8)},
-                'WEST VIRGINIA': {'lat_range': (37.1, 40.7), 'lon_range': (-82.8, -77.7)},
-                'WISCONSIN': {'lat_range': (42.4, 47.3), 'lon_range': (-93.0, -86.7)},
-                'WYOMING': {'lat_range': (40.9, 45.1), 'lon_range': (-111.1, -104.0)}
-            }
-
             matched_records = []
-            crop_df = crop_df[crop_df['state_name'].notna()].copy()
-
             dropped = crop_df['state_name'].isna().sum()
             logger.info(f"Dropped {dropped} crop rows with missing state_name")
+            
+            crop_df = crop_df[crop_df['state_name'].notna()].copy()
 
             crop_df['state_name'] = crop_df['state_name'].str.upper().str.strip()
             crop_df['county_name'] = crop_df['county_name'].str.upper().str.strip()
@@ -268,30 +277,14 @@ class WeatherBasedModelTrainer:
 
             for _, soil_row in enhanced_df.iterrows():
                 try:
-                    lat = float(soil_row['sample_latitude'])
-                    lon = float(soil_row['sample_longitude'])
-                    soil_year = int(soil_row['sample_year'])
-
-                    if soil_year is None:
-                        continue
+                    soil_state = soil_row['state_name']
+                    soil_year = soil_row['sample_year']
                     
-                    soil_state = None
-                    for state, bounds in state_boundaries.items():
-                        lat_min, lat_max = bounds['lat_range']
-                        lon_min, lon_max = bounds['lon_range']
-
-                        if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
-                            soil_state = state
-                            break
-                    
-                    if not soil_state:
-                        no_state_count += 1
-                        continue
-                    
+                    max_lookback = 10
                     matching_crops = crop_df[
                         (crop_df['state_name'] == soil_state) &
                         (crop_df['year'] <= soil_year) &
-                        (crop_df['year'] >= soil_year -1)
+                        (crop_df['year'] >= soil_year - max_lookback)
                     ]
 
                     if matching_crops.empty:
@@ -326,8 +319,11 @@ class WeatherBasedModelTrainer:
             
             if matched_records:
                 matched_df = pd.DataFrame(matched_records)
+                matched_df = matched_df.drop(columns = ['year_difference']) 
+
                 if 'state_name' not in self.categorical_features:
                     self.categorical_features.append('state_name')
+
                 logger.info(f"Successfully matched {len(matched_df)} training records")
                 logger.info(f"Soil samples with no inferred state: {no_state_count}")
                 return matched_df
@@ -466,18 +462,25 @@ def main():
         logger.info("Starting weather-based model training...")
         
         # Step 1: Get weather and soil data
+
         enhanced_data = trainer.get_weather_and_soil_data()
         if enhanced_data.empty:
             logger.error("No enhanced data available, aborting")
             return
         
-        # Step 2: Match with crop yields
+        # Step 2: Assign States
+        enhanced_data = trainer.assign_states_to_soil_samples(enhanced_data)
+        if enhanced_data.empty:
+            logger.error("No state-assigned data available, aborting")
+            return
+        
+        # Step 3: Match with crop yeilds
         training_data = trainer.match_with_crop_yields(enhanced_data)
         if training_data.empty:
             logger.error("No training data created, aborting")
             return
 
-        # step 3: run pipeline
+        # step 3: Run pipeline
         model = trainer.train_with_grid_search(df = training_data)
         logger.info("Training pipeline completed successfully")
         
