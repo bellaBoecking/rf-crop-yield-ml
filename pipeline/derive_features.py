@@ -1,3 +1,7 @@
+"""
+derive_features.py
+"""
+
 from sklearn.base import BaseEstimator, TransformerMixin
 import pandas as pd
 import numpy as np
@@ -7,9 +11,27 @@ logger = logging.getLogger(__name__)
 
 class DerivedFeaturesTransformer(BaseEstimator, TransformerMixin):
     """
-    Transformer for deriving new features:
-    - Numeric features: soil_quality_score, temp_optimality, ca_mg_ratio
-    - Categorical feature: gdd_suitability
+    Transformer that derives additional features from raw inputs.
+
+    This transformer augments the input feature set with domain-informed numeric and 
+    categorial features derived from raw data. No parameters are learned during fitting, 
+    all transformations are deterministic.
+
+    Inherits from:
+        Base Estimator: 
+            Provides scikit-learn parameter management, enabling compatibility with
+            model selection utilities such as GridSearchCV.
+        TransformerMixin:
+            Supplies the fit-transformer interface required for integration into scikit-learn
+            pipeline.
+   
+    Derived features:
+        Numeric:
+            - soil_quality_score
+            - temp_optimality
+            - ca_mg_ratio
+        Categorical: 
+            - gdd_suitability
     """
 
     def __init__(self):
@@ -18,18 +40,27 @@ class DerivedFeaturesTransformer(BaseEstimator, TransformerMixin):
 
     def fit(self, X, y = None):
         """
-        Fit method is required for sklearn pipeline compatability
-        No fitting needed for this transformer
+        Fit method is implemented for compatibility with scikit-learn pipelines.
+        No state is learned during fitting; all derived features are computed deterministically
+        from the input data.
         """
         return self
 
     def transform(self, X):
         """
-        Transform the input DataFrame by adding derived features
+        Add derived numeric and categorical features to the input DataFrame.
+
+        This method computes features capturing soil quality, temperature optimality, 
+        nutrient balance, and crop-specific growing degree day suitability. Original features are 
+        preserved and new columns are appended to the dataframe.
+
+        Args:
+            Training DataFrame
+        
+        Returns: Transformed DataFrame with new features.
         """
         try:
             X = X.copy() if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
-            logger.info(f"Starting feature derivation for {len(X)} records")
 
             ph_vals = X['ph_h2o']
             oc_vals = X['estimated_organic_carbon']
@@ -57,6 +88,19 @@ class DerivedFeaturesTransformer(BaseEstimator, TransformerMixin):
             }
 
             def check_gdd_suitability(row):
+                """
+                Determines crop-specific growing degree day suitability.
+
+                Compares observed growing degree days for a sample against predefined optimal
+                ranges for each supported commodity.
+
+                Args: 
+                    row: Single observation including commodity type
+
+                Returns:
+                    'Optimal'/'Suboptimal': String description of commodity desc and gdd_ranges 
+                    compatability
+                """
                 crop = row['commodity_desc']
                 if crop in gdd_ranges:
                     low, high = gdd_ranges[crop]
@@ -65,10 +109,9 @@ class DerivedFeaturesTransformer(BaseEstimator, TransformerMixin):
 
             X['gdd_suitability'] = X.apply(check_gdd_suitability, axis = 1)
 
-            logger.info("Feature derivation completed successfully")
             return X        
 
         except Exception as e:
             logger.error(f"Error calculating derived features: {e}")
-            logger.error("returning input DataFrame without modifications")
+            logger.error("Returning input DataFrame without modifications")
             return X
