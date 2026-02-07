@@ -16,7 +16,7 @@ The outcome of this project is both a predictive model and a structured investig
 This project was primarily designed, implemented, and analyzed by bellaBoecking.
 
 Additional contributions:
-- tylrdnns - Preliminary Supabase access setup; selection of raw features; early derived-feature calculations; core dataframe joins during early preprocessing; initial logging scaffolding and application entry-point ('main') setup.
+- [**tylrdnns**](https://github.com/tylrdnns) - Preliminary Supabase access setup; selection of raw features; early derived-feature calculations; core dataframe joins during early preprocessing; initial logging scaffolding and application entry-point ('main') setup.
 
 All final feature definitions, refactored feature engineering, pipeline architecture and integration, modeling, evaluation, diagnostics, and documentation were completed by Bella.
 
