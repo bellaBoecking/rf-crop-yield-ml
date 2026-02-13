@@ -8,6 +8,7 @@ This project implements an end-to-end machine learning pipeline for predicting c
 - Soil chemical and physical laboratory measurements
 - Spatial information derived from TIGER state polygons
 - Historical crop yield records
+
 The core modeling approach uses a Random Forest Regressor accompanied by a structured diagnostic framework. The pipeline explicitly analyzes local target instability, fold-level performance variation, and train-test similarity in mixed feature spaces. 
 
 The outcome of this project is both a predictive model and a structured investigation into where and why predictive accuracy varies. This work was created to demonstrate predictive accuracy, applied ML reasoning, a deep understanding of how the data behaves, its implications for modeling, and production-aware pipeline design.
