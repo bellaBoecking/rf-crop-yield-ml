@@ -9,9 +9,30 @@ This project implements an end-to-end machine learning pipeline for predicting c
 - Spatial information derived from TIGER state polygons
 - Historical crop yield records
 
-The core modeling approach uses a Random Forest Regressor accompanied by a structured diagnostic framework. The pipeline explicitly analyzes local target instability, fold-level performance variation, and train-test similarity in mixed feature spaces. 
+### Key metrics
+- **Mean CV R^2: 0.77 ± 0.26 (std. dev.)**
+- Mean R^2 vs. High-Variance Fraction Correlation: -.32 ± 0.37 (std. dev.)
+- Mean Train-Test Similarity: .98
 
-The outcome of this project is both a predictive model and a structured investigation into where and why predictive accuracy varies. This work was created to demonstrate predictive accuracy, applied ML reasoning, a deep understanding of how the data behaves, its implications for modeling, and production-aware pipeline design.
+## Engineering Highlights:
+- End-to-end reproducible pipeline
+- Dual-stage leakage protection (GroupShuffleSplit + GroupKFold)
+- Deterministic feature engineering via custom transformers
+- Custom state-level groupwise imputers
+- Geospatial feature engineering via TIGER polygon spatial joins
+- Modular diagnostics framework for fold-level and neighborhood analysis
+- Modular diagnostics framework for model failure analysis
+- Custom mixed-feature distance metrics to preserve numeric smoothness in mixed-feature spaces and analyze data geometry
+- Detection of unstable CV folds via local target variance analysis
+- Explicit separation of model error versus structural unpredictability
+- Verbose logging with fold-level transparency
+- Fail-fast data validation across pipeline stages
+- Persisted intermediate datasets for reproducible diagnostics
+- Centralized path configuration for environment portability
+
+The core modeling approach uses a Random Forest Regressor accompanied by a structured diagnostic framework. The pipeline explicitly analyzes local target instability, fold-level performance variation, and train-test similarity in mixed feature spaces. This work demonstrates the integration of heterogeneous datasets, performance of robust feature engineering, and implementation of rich model diagnostics.
+
+The outcome of this project is both a predictive model and a structured investigation into where and why predictive accuracy varies. This work was created to demonstrate predictive accuracy, applied ML reasoning, a deep understanding of how the data behaves and its implications for modeling, and production-aware pipeline design.
 
 ## Authorship and Contributions:
 This project was primarily designed, implemented, and analyzed by bellaBoecking.
@@ -28,7 +49,7 @@ Some of the challenges faced during the project's construction include:
 - Neighborhoods of high target variance, where predictive accuracy is structurally limited
 - Mixed numeric and categorical feature spaces
 
-The project explicitly models and measures local violations of smoothness assumptions instead of assuming  i.i.d or smooth target behavior everywhere, quantifying where smoothness fails and connecting it to model uncertainty.
+The project explicitly models and measures local violations of smoothness assumptions instead of assuming i.i.d or smooth target behavior everywhere, quantifying where smoothness fails and connecting it to model uncertainty.
 
 ## Data Sources:
 Data is retrieved from Supabase-backed tables and merged via left joins to preserve observational integrity and prioritize weather data:
@@ -86,7 +107,7 @@ Cross-Validation: GroupKFold using soil sample IDs (pedlabsampnum)
 
 Group-aware splitting ensures that no soil sample appears in both training and validation sets, even when matched to multiple crop years.
 
-RandomForestRegressor was chosen due to its ability to capture non-linear relationships, handle mixed feature types, computational efficiency, and favorable performance metrics in multi-model crop yield prediction studies.
+RandomForestRegressor was chosen for its ability to capture non-linear relationships, handle mixed feature types, computational efficiency, and favorable performance metrics in multi-model crop yield prediction studies.
 
 ## Diagnostics
 
@@ -118,25 +139,23 @@ This separates distributional shift effects from intrinsic target noise, suggest
 The pipeline computes the correlation between:
 - Fold-level R^2
 - Fraction of high local variance samples
-Provides strong evidence that performance degradation is positively correlated with local instability, not random variance.
+Provides strong evidence that performance degradation is positively correlated with local instability, not random variance or covariate shift.
+
+## Cross-Validation Performance
+Repeated GroupKFold runs show substantial variation in predictive performance. This variability is consistent with the presence of high local-variance target regions.
+Mean CV R^2 across runs: **0.77 ± 0.26 (std. dev.)**
+![Distribution of cross-validation R^2 scores](figures/r^2_histogram.png)
 
 ## Results Interpretation:
+**Local Target Instability**: Fold-level R^2 is negatively correlated with high local variance target regions, suggesting that intrinsic target variability contributes to performance degradation.
+- -.32 ± 0.37 (mean ± std across 15 runs)
+**Covariate Shift**: Gower-based nearest-neighbor similarity between train and validation folds remains consistently high (mean similarity ~ 0.98), indicating that distributional differences between training and validation samples are minimal and are unlikely to explain the observed R^2 variability.
+**Structural Limitations**: High-variance neighborhoods set structural limits on predictability.
+
 Model performance is intentionally contextualized:
 - Strong average performance does not imply universal predictability
-- Evidence suggests that some regions of high feature similarity exhibit unstable targets
 - Diagnostic signals explain where the model can and cannot be trusted
 - The model provides strong holdout performance in the majority of runs, but performance degrades when high-variance neighborhoods are unevenly distributed across folds, occasionally resulting in poor validation scores
-
-## Engineering Highlights
-- End-to-end reproducible pipeline
-- Strict leakage prevention via group-aware splitting
-- Deterministic feature derivation
-- Modular diagnostics architecture
-- Centralized path configuration
-- Verbose logging with fold-level transparency
-- Explicit diagnosis of where assumptions fail
-- Interpretable and robust under authentic, messy data
-- Standard and custom distance metrics used to probe data geometry and preserve numeric smoothness in mixed-feature spaces
 
 ## Limitations and Future Work
 - State-level matching is a coarse spatial proxy
