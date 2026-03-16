@@ -144,7 +144,7 @@ Provides strong evidence that performance degradation is positively correlated w
 ## Cross-Validation Performance
 Repeated GroupKFold runs show substantial variation in predictive performance. This variability is consistent with the presence of high local-variance target regions.
 Mean CV R^2 across runs: **0.77 ± 0.26 (std. dev.)**
-![Distribution of cross-validation R^2 scores](figures/r2_distribution.png)
+<img src="figures/r2_distribution.png" width="400" />
 
 ## Results Interpretation:
 **Local Target Instability**: Fold-level R^2 is negatively correlated with high local variance target regions, suggesting that intrinsic target variability contributes to performance degradation.
