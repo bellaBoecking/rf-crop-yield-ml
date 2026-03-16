@@ -144,6 +144,7 @@ Provides strong evidence that performance degradation is positively correlated w
 ## Cross-Validation Performance
 Repeated GroupKFold runs show substantial variation in predictive performance. This variability is consistent with the presence of high local-variance target regions.
 Mean CV R^2 across runs: **0.77 ± 0.26 (std. dev.)**
+
 <img src="figures/r2_distribution.png" width="400" />
 
 ## Results Interpretation:
