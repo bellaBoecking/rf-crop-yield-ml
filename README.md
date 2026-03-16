@@ -149,7 +149,8 @@ Mean CV R^2 across runs: **0.77 ± 0.26 (std. dev.)**
 
 ## Results Interpretation:
 **Local Target Instability**: Fold-level R^2 is negatively correlated with high local variance target regions, suggesting that intrinsic target variability contributes to performance degradation.
-- -.32 ± 0.37 (mean ± std across 15 runs)
+-.32 ± 0.37 (mean ± std across 15 runs)
+
 **Covariate Shift**: Gower-based nearest-neighbor similarity between train and validation folds remains consistently high (mean similarity ~ 0.98), indicating that distributional differences between training and validation samples are minimal and are unlikely to explain the observed R^2 variability.
 **Structural Limitations**: High-variance neighborhoods set structural limits on predictability.
 
