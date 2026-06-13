@@ -90,7 +90,7 @@ class GroupedMostFrequentImputer(BaseEstimator, TransformerMixin):
     This transformer imputes missing categorical values by using the most frequent value (mode) 
     observed within each state. If a state has no valid observation, the global model is used.
 
-    Compatible with  scikit-learn pipelines and cross-validation. 
+    Compatible with scikit-learn pipelines and cross-validation. 
     """
     def __init__(self, group_col, impute_col):
         self.group_col = group_col
