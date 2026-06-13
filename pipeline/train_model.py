@@ -271,7 +271,7 @@ class WeatherBasedModelTrainer:
     def match_with_crop_yields(self, enhanced_df):
         """
         Matches soil-weather records in 'enhanced_df' with historical crop yield records from Supabase.
-        Matching is performed using ap[proximate spatial (state boundaries) and temporal criteria, 
+        Matching is performed using approximate spatial (state boundaries) and temporal criteria, 
         with a lookback window to capture crop years when exact matches are not available.
 
         For each soil sample, multiple crop-year observations may be matched. The resulting matched
@@ -282,7 +282,7 @@ class WeatherBasedModelTrainer:
             - Only considers crops in ['CORN', 'SOYBEANS', 'WHEAT', 'COTTON', 'BARLEY']
             - Years between 1948 and 2025
             - Yield values must be numeric, positive, and < 1000
-            - Primary match: same state and year <= sample tear within a 10-year lookback
+            - Primary match: same state and year <= sample year within a 10-year lookback
             - If no crops found within lookback, uses closest prior year
             - Adds matched crop info to the soil sample, preserving state_name
 
