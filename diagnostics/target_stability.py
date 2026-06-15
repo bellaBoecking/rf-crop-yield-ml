@@ -45,7 +45,7 @@ def compute_local_y_variance(
     categorical_features,
     k=10,
     crop_feature="commodity_desc",
-    numeric_weight=0.8,
+    numeric_weight=None,
 ):
     """
     Compute local target variance using a smoothness-aware mixed-feature distance.
@@ -63,11 +63,18 @@ def compute_local_y_variance(
         k: Number of nearest neighbors.
         crop_feature: Name of the crop/commodity categorical column.
         numeric_weight: Weight assigned to numeric distance. Must be between
-            0 and 1. The remaining weight is assigned to categorical distance.
+            0 and 1. If None, defaults to the fraction of features that are numeric.
 
     Returns:
         local_vars: Local target variances indexed like X.
     """
+
+    n_numeric = len(numeric_features)
+    n_categorical = len(categorical_features)
+    total_features = n_numeric + n_categorical
+
+    if total_features == 0:
+        raise ValueError("At least one numeric or categorical feature is required.")
 
     if len(X) != len(y):
         raise ValueError("X and y must have the same length.")
@@ -75,23 +82,45 @@ def compute_local_y_variance(
     if k < 1:
         raise ValueError("k must be at least 1.")
 
+    missing_numeric = [col for col in numeric_features if col not in X.columns]
+    missing_categorical = [col for col in categorical_features if col not in X.columns]
+
+    if missing_numeric:
+        raise ValueError(f"Missing numeric columns in X: {missing_numeric}")
+
+    if missing_categorical:
+        raise ValueError(f"Missing categorical columns in X: {missing_categorical}")
+
+    if numeric_weight is None:
+        numeric_weight = n_numeric / total_features
+
+    if not np.isfinite(numeric_weight):
+        raise ValueError("numeric_weight must be finite.")
+
     if not 0 <= numeric_weight <= 1:
         raise ValueError("numeric_weight must be between 0 and 1.")
 
-    if crop_feature not in categorical_features:
+    categorical_weight = 1.0 - numeric_weight
+
+    if n_categorical > 0 and crop_feature not in categorical_features:
         logger.warning(
             "%s is not in categorical_features, so crop yield-dissimilarity "
             "penalties will not be used.",
             crop_feature,
         )
 
-    scaler = MinMaxScaler()
+    if n_numeric > 0:
+        scaler = MinMaxScaler()
+        X_num = scaler.fit_transform(X[numeric_features])
+    else:
+        X_num = None
 
-    X_num = scaler.fit_transform(X[numeric_features])
-    X_cat = X[categorical_features].fillna("MISSING").astype(str).values
+    if n_categorical > 0:
+        X_cat = X[categorical_features].fillna("MISSING").astype(str).values
+    else:
+        X_cat = None
+
     y_values = np.asarray(y)
-
-    categorical_weight = 1.0 - numeric_weight
 
     def crop_yield_dissimilarity(a, b):
         """
@@ -132,16 +161,23 @@ def compute_local_y_variance(
             Mean categorical distance across categorical features. Crop uses
             graded yield-dissimilarity; other categoricals use 0/1 mismatch.
         """
-        num_dist = np.nanmean(np.abs(X_num[i] - X_num[j]))
+        if n_numeric > 0:
+            num_dist = np.nanmean(np.abs(X_num[i] - X_num[j]))
+        else:
+            num_dist = 0.0
 
-        cat_dists = []
+        if n_categorical > 0:
+            cat_dists = []
 
-        for cat_idx, col_name in enumerate(categorical_features):
-            a = X_cat[i, cat_idx]
-            b = X_cat[j, cat_idx]
-            cat_dists.append(categorical_distance(col_name, a, b))
+            for cat_idx, col_name in enumerate(categorical_features):
+                a = X_cat[i, cat_idx]
+                b = X_cat[j, cat_idx]
+                cat_dists.append(categorical_distance(col_name, a, b))
 
-        cat_dist = np.mean(cat_dists) if cat_dists else 0.0
+            cat_dist = np.mean(cat_dists)
+        else:
+            cat_dist = 0.0
+
         mixed_dist = numeric_weight * num_dist + categorical_weight * cat_dist
 
         return mixed_dist
@@ -151,12 +187,13 @@ def compute_local_y_variance(
 
     for i in range(n):
         dists = []
+
         for j in range(n):
             if i == j:
                 continue
 
             dists.append((mixed_distance(i, j), j))
-            
+
         dists.sort(key=lambda x: x[0])
         neighbors = [j for _, j in dists][:k]
 
