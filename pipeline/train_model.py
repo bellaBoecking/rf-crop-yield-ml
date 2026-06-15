@@ -279,7 +279,7 @@ class WeatherBasedModelTrainer:
         year, yield value, and unit. Missing or invalid crop records are filtered out.
 
         Matching logic: 
-            - Only considers crops in ['CORN', 'SOYBEANS', 'WHEAT', 'COTTON', 'BARLEY']
+            - Only considers crops in ['CORN', 'SOYBEANS', 'WHEAT', 'BARLEY']
             - Years between 1948 and 2025
             - Yield values must be numeric, positive, and < 1000
             - Primary match: same state and year <= sample year within a 10-year lookback
@@ -309,7 +309,7 @@ class WeatherBasedModelTrainer:
             crop_response = self.supabase.table('nass_crops').select(
                 'commodity_desc, year, value, state_name, county_name, unit_desc'
             ).eq('statisticcat_desc', 'YIELD').in_(
-                'commodity_desc', ['CORN', 'SOYBEANS', 'WHEAT', 'COTTON', 'BARLEY']
+                'commodity_desc', ['CORN', 'SOYBEANS', 'WHEAT', 'BARLEY']
             ).gte('year', 1948).lte('year', 2025).execute()
             
             if not crop_response.data:
