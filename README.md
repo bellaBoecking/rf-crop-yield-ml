@@ -3,11 +3,11 @@
 #### Random Forest Regression on Weather, Soil, and Spatial-Temporal Heuristics
 
 ## Overview
-This project implements an end-to-end machine learning pipeline for predicting crop yields using heterogeneous environmental data, including:
+This project implements an end-to-end machine learning pipeline for exploratory crop yield prediction using heterogeneous environmental data, including:
 - Weather observations
 - Soil chemical and physical laboratory measurements
 - Spatial information derived from TIGER state polygons
-- Historical crop yield records
+- State-level historical crop yield records
 
 ### Key metrics
 - **Mean CV R^2: 0.77 ± 0.26 (std. dev.)**
@@ -24,7 +24,7 @@ This project implements an end-to-end machine learning pipeline for predicting c
 - Modular diagnostics framework for model failure analysis
 - Custom mixed-feature distance metric designed to emphasize numeric smoothness in mixed-feature spaces and support analysis of local data geometry
 - Detection of unstable CV folds via local target variance analysis
-- Explicit separation of model error versus structural unpredictability
+- Diagnostic framework for distinguishing model error from potential data/target instability
 - Verbose logging with fold-level transparency
 - Fail-fast data validation across pipeline stages
 - Persisted intermediate datasets for reproducible diagnostics
@@ -47,7 +47,7 @@ Some of the challenges faced during the project's construction include:
 - Neighborhoods of high target variance, where predictive accuracy is structurally limited
 - Mixed numeric and categorical feature spaces
 
-The project explicitly models and measures local violations of ness assumptions instead of assuming i.i.d or  target behavior everywhere, quantifying where smoothness fails and connecting it to model uncertainty.
+The project explicitly measures local violations of smoothness assumptions instead of assuming uniform target behavior across the feature space. Because the yield labels are constructed through coarse spatial-temporal matching, the diagnostics are interpreted cautiously: high local target variance may reflect intrinsic target noise, missing explanatory variables, or instability introduced by the label-matching process itself.
 
 ## Data Sources:
 Data is retrieved from Supabase-backed tables and merged via left joins to preserve observational integrity and prioritize weather data:
@@ -116,7 +116,7 @@ For each observation, the project computes Var(Y|X~x) using a custom mixed-featu
 - Crop categorical feature: graded crop yield-dissimilarity penalty
 - Combined via feature-count-weighted averaging
 
-This avoids discontinuities induced by standard Gower distance while remaining applicable to mixed data.
+This reduces the all-or-nothing treatment of crop mismatches used by standard nominal Gower distance while remaining applicable to mixed data.
 
 High local variance regions indicate where predictability is structurally limited by the data.
 
@@ -138,7 +138,7 @@ This separates distributional shift effects from intrinsic target noise, suggest
 The pipeline computes the correlation between:
 - Fold-level R^2
 - Fraction of high local variance samples
-Provides strong evidence that performance degradation is positively correlated with local instability, not random variance or covariate shift.
+This provides exploratory evidence that folds with more high-variance neighborhoods tend to perform worse, though the relationship is noisy and should be interpreted cautiously.
 
 ## Cross-Validation Performance
 Repeated GroupKFold runs show substantial variation in predictive performance. This variability is consistent with the presence of high local-variance target regions.
@@ -153,7 +153,7 @@ Mean CV R^2 across runs: **0.77 ± 0.26 (std. dev.)**
 
 **Covariate Shift**: Gower-based nearest-neighbor similarity between train and validation folds remains consistently high (mean similarity ~ 0.98), indicating that distributional differences between training and validation samples are minimal and are unlikely to explain the observed R^2 variability.
 
-**Structural Limitations**: High-variance neighborhoods set structural limits on predictability.
+**Structural Limitations**: High-variance neighborhoods may indicate regions where predictability is limited by target noise, label construction, or missing explanatory variables.
 
 Model performance is intentionally contextualized:
 - Strong average performance does not imply universal predictability
