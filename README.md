@@ -61,7 +61,7 @@ Soil samples are assigned U.S. labels via point-in-polygon joins using TIGER sha
 
 ## Matching Logic: Soil -> Crop Yield
 Each soil-weather observation is matched to historical crop yields using appropriate spatial and temporal heuristics:
-- Crops: CORN, SOYBEANS, WHEAT, COTTON, BARLEY
+- Crops: CORN, SOYBEANS, WHEAT, BARLEY
 - Years: 1948-2025
 - Fallback: Closest prior year if no match exists within the window
 
