@@ -44,7 +44,7 @@ The majority of this project--final feature definitions, refactored feature engi
 Some of the challenges faced during the project's construction include:
 - Coarse spatial alignment (soil samples vs. state-level yield data)
 - Temporal mismatch between sampling and reported yields
-- Neighborhoods of high target variance, where predictive accuracy is structurally limited
+- Neighborhoods of high target variance, where predictive accuracy may be limited by target noise, label construction, or missing explanatory variables
 - Mixed numeric and categorical feature spaces
 
 The project explicitly measures local violations of smoothness assumptions instead of assuming uniform target behavior across the feature space. Because the yield labels are constructed through coarse spatial-temporal matching, the diagnostics are interpreted cautiously: high local target variance may reflect intrinsic target noise, missing explanatory variables, or instability introduced by the label-matching process itself.
@@ -89,6 +89,7 @@ No learned parameters are introduced at this stage; all derivations are reproduc
 Missing values are imputed within state groups, with global fallbacks where necessary.
 - Numeric features -> state-level medians
 - Categorical values -> state-level modes
+
 This technique avoids leakage across spatial regions while remaining robust to sparsely populated groups.
 
 ### Encoding and Scaling:
@@ -105,7 +106,7 @@ Cross-Validation: GroupKFold using soil sample IDs (pedlabsampnum)
 
 Group-aware splitting ensures that no soil sample appears in both training and validation sets, even when matched to multiple crop years.
 
-RandomForestRegressor was chosen for its ability to capture non-linear relationships, handle mixed feature types, computational efficiency, and favorable performance metrics in multi-model crop yield prediction studies.
+RandomForestRegressor was chosen as a strong nonlinear baseline after preprocessing because it can capture feature interactions, performs well on tabular data, supports reliable fold-level evaluation, and performs favorably in multi-model crop yield prediction studies.
 
 ## Diagnostics
 
@@ -118,10 +119,10 @@ For each observation, the project computes Var(Y|X~x) using a custom mixed-featu
 
 This reduces the all-or-nothing treatment of crop mismatches used by standard nominal Gower distance while remaining applicable to mixed data.
 
-High local variance regions indicate where predictability is structurally limited by the data.
+High local variance regions indicate where predictability is limited by target noise, coarse label construction, or missing explanatory variables.
 
 ### 2. Fold-level Instability Analysis
-For each cv fold, the pipeline reports:
+For each CV fold, the pipeline reports:
 - RMSE, MAE, R^2
 - Normalized target variance
 - Target range
@@ -132,7 +133,7 @@ Folds with unusually low R^2 are explicitly identified and interpreted through t
 ### 3. Train-Test Similarity (Gower Diagnostics)
 A Gower-based nearest-neighbor similarity analysis quantifies how “familiar” validation samples are relative to training data in each fold.
 
-This separates distributional shift effects from intrinsic target noise, suggesting covariate shift is not the primary driver of high holdout R^2 variance between runs.
+This helps distinguish large covariate-shift effects from local target instability, suggesting that distributional shift is unlikely to be the sole driver of high validation R² variance.
 
 ### 4. Correlation Analysis
 The pipeline computes the correlation between:
@@ -158,7 +159,7 @@ Mean CV R^2 across runs: **0.77 ± 0.26 (std. dev.)**
 Model performance is intentionally contextualized:
 - Strong average performance does not imply universal predictability
 - Diagnostic signals explain where the model can and cannot be trusted
-- The model provides strong holdout performance in the majority of runs, but performance degrades when high-variance neighborhoods are unevenly distributed across folds, occasionally resulting in poor validation scores
+- The model provides strong validation performance in the majority of runs, but performance degrades when high-variance neighborhoods are unevenly distributed across folds, occasionally resulting in poor validation scores
 
 ## Limitations and Future Work
 - State-level matching is a coarse spatial proxy
