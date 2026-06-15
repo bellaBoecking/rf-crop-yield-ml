@@ -27,55 +27,106 @@ from .feature_similarity import gower_distance
 
 logger = logging.getLogger(__name__)
 
-def compute_local_y_variance(X, y, numeric_features, categorical_features, k = 10):
+CROP_DISTANCE = {
+    frozenset(("CORN", "SOYBEANS")): 0.950,
+    frozenset(("CORN", "WHEAT")): 0.948,
+    frozenset(("CORN", "BARLEY")): 0.768,
+    frozenset(("BARLEY", "SOYBEANS")): 0.232,
+    frozenset(("BARLEY", "WHEAT")): 0.230,
+    frozenset(("SOYBEANS", "WHEAT")): 0.052,
+}
+
+def compute_local_y_variance(
+    X,
+    y,
+    numeric_features,
+    categorical_features,
+    k = 10,
+    crop_feature = "commodity_desc",
+    numeric_weight = 0.8,
+):
     """
-    Compute local target variance using smooth mixed-feature neighborhoods.
+    Compute local target variance using a smoothness-aware mixed-feature distance.
 
-    Distances are combined using weights proportional to the number of numeric and 
-    categorical features, yielding neighborhoods that reflect both smooth numeric evaluation and 
-    categorical structure. Local variance of targets is then computed within each neighborhood
-    as a diagnostic of local instability.
+    Numeric features are min-max scaled and compared using mean absolute L1 distance.
+    Unlike standard Gower distance, which treats categorical mismatches as binary 0/1
+    penalties, the crop categorical feature uses a graded crop-distance matrix. This
+    allows crop mismatches to contribute different distances depending on their
+    empirical/domain-informed yield similarity.
 
-    Args: 
-        X: Training feature DataFrame
-        y: Validation feature DataFrame
-        numeric_features: Numeric feature names
-        categorical_features: Categorical feature names
+    Other categorical features are still treated as standard Hamming mismatches unless
+    a custom distance is defined for them.
+
+    Args:
+        X: Feature DataFrame.
+        y: Target Series.
+        numeric_features: Numeric feature names.
+        categorical_features: Categorical feature names.
+        k: Number of nearest neighbors.
+        crop_feature: Name of the crop/commodity categorical column.
+        numeric_weight: Weight assigned to numeric distance. The remaining weight is
+            assigned to categorical distance.
 
     Returns:
-        local_vars: Calculated local variances
+        local_vars: Local target variances indexed like X.
     """
 
     scaler = MinMaxScaler()
 
     X_num = scaler.fit_transform(X[numeric_features])
     X_cat = X[categorical_features].astype(str).values
-    
+
+    categorical_weight = 1.0 - numeric_weight
+
+    def crop_distance(a, b):
+        """
+        Graded crop distance.
+
+        Same crop has distance 0. Different crops use the predefined crop-distance
+        matrix. Unknown crop pairs fall back to 1.0.
+        """
+        a = str(a).upper().strip()
+        b = str(b).upper().strip()
+
+        if a == b:
+            return 0.0
+
+        return CROP_DISTANCE.get(frozenset((a, b)), 1.0)
+
+    def categorical_distance(col_name, a, b):
+        """
+        Feature-specific categorical distance.
+
+        Crop/commodity uses the graded crop distance matrix.
+        Other categorical features use standard 0/1 mismatch distance.
+        """
+        if col_name == crop_feature:
+            return crop_distance(a, b)
+
+        return float(str(a) != str(b))
 
     def mixed_distance(i, j):
         """
-        Custom metric distance function, computes mixed-feature distance between two observations.
+        Smoothness-aware mixed-feature distance between observations i and j.
 
-        Numeric features contribute a normalized L1 distance computed as the mean absolute difference across
-        numeric features. Categorical features contribute a normalized Hamming distance, computed
-        as the fraction of mismatched categories.
-
-        The final distance is a weighted sum of numerical and categorical components, with weights
-        proportional to the number of features of each type.
-
-        Args:
-            i: Index of first observation
-            j: Index of second observation
-
-        Returns:
-            mixed_dist: Mixed-feature distance between observations i and j. Lower values indicate
-            greater similarity.
+        Numeric features contribute scaled L1 distance. Categorical features contribute
+        the average feature-specific categorical distance. For crop identity, this is
+        a graded distance rather than a binary mismatch.
         """
         num_dist = np.nanmean(np.abs(X_num[i] - X_num[j]))
-        cat_dist = np.mean(X_cat[i] != X_cat[j])
-        feature_sum = len(numeric_features) + len(categorical_features)
 
-        mixed_dist = (len(numeric_features) / feature_sum) * num_dist + (len(categorical_features) / feature_sum) * cat_dist
+        cat_dists = []
+
+        for cat_idx, col_name in enumerate(categorical_features):
+            a = X_cat[i, cat_idx]
+            b = X_cat[j, cat_idx]
+
+            cat_dists.append(
+                categorical_distance(col_name, a, b)
+            )
+
+        cat_dist = np.mean(cat_dists) if cat_dists else 0.0
+        mixed_dist = numeric_weight * num_dist + categorical_weight * cat_dist
 
         return mixed_dist
 
@@ -87,12 +138,13 @@ def compute_local_y_variance(X, y, numeric_features, categorical_features, k = 1
         for j in range(n):
             if i == j:
                 continue
-            dists.append((mixed_distance(i, j), j)) 
 
-        dists.sort(key = lambda x: x[0]) 
-        neighbors = [j for d, j in dists if d > 0][:k] 
-        local_vars.append(np.var(y.iloc[neighbors], ddof = 1))
+            dists.append((mixed_distance(i, j), j))
 
-    local_vars = pd.Series(local_vars, index = X.index) 
+        dists.sort(key=lambda x: x[0])
+        neighbors = [j for d, j in dists if d > 0][:k]
+        local_vars.append(np.var(y.iloc[neighbors], ddof=1))
+
+    local_vars = pd.Series(local_vars, index=X.index)
 
     return local_vars
