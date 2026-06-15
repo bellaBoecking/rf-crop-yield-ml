@@ -22,7 +22,7 @@ This project implements an end-to-end machine learning pipeline for predicting c
 - Geospatial feature engineering via TIGER polygon spatial joins
 - Modular diagnostics framework for fold-level and neighborhood analysis
 - Modular diagnostics framework for model failure analysis
-- Custom mixed-feature distance metrics to preserve numeric smoothness in mixed-feature spaces and analyze data geometry
+- Custom mixed-feature distance metric designed to emphasize numeric smoothness in mixed-feature spaces and support analysis of local data geometry
 - Detection of unstable CV folds via local target variance analysis
 - Explicit separation of model error versus structural unpredictability
 - Verbose logging with fold-level transparency
@@ -47,7 +47,7 @@ Some of the challenges faced during the project's construction include:
 - Neighborhoods of high target variance, where predictive accuracy is structurally limited
 - Mixed numeric and categorical feature spaces
 
-The project explicitly models and measures local violations of smoothness assumptions instead of assuming i.i.d or smooth target behavior everywhere, quantifying where smoothness fails and connecting it to model uncertainty.
+The project explicitly models and measures local violations of ness assumptions instead of assuming i.i.d or  target behavior everywhere, quantifying where smoothness fails and connecting it to model uncertainty.
 
 ## Data Sources:
 Data is retrieved from Supabase-backed tables and merged via left joins to preserve observational integrity and prioritize weather data:
@@ -110,9 +110,10 @@ RandomForestRegressor was chosen for its ability to capture non-linear relations
 ## Diagnostics
 
 ### 1. Local Target Variance:
-For each observation, the project computes Var(Y|X~x) using a custom mixed-feature distance designed to preserve numeric smoothness:
+For each observation, the project computes Var(Y|X~x) using a custom mixed-feature distance designed to better reflect numeric smoothness while still accounting for categorical differences:
 - Numeric features: MinMax-scaled L1 distance
-- Categorical features: normalized Hamming distance
+- Non-Crop Categorical features: normalized Hamming distance
+- Crop categorical feature: graded crop yield-dissimilarity penalty
 - Combined via feature-count-weighted averaging
 
 This avoids discontinuities induced by standard Gower distance while remaining applicable to mixed data.
