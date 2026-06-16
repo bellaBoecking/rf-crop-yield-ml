@@ -7,7 +7,7 @@ Crop Yield Prediction Pipeline
 ------------------------------
 Project connects to Supabase to retrieve weather, soil chemical, and physical data, and assigns geographic 
 state information to soil samples using TIGER polygons. It then matches soil samples with historical
-crop yields using approximate spatial and temporal heuristics and trains a Random Forest 
+crop yields using approximate spatial and temporal heuristics, and trains a Random Forest 
 regressor using a scikit-learn pipeline with group-aware imputation, feature derivation, one-hot
 encoding, and cross-validation.
 
@@ -87,7 +87,7 @@ logger = logging.getLogger(__name__)
 # Model Trainer Class
 class WeatherBasedModelTrainer:
     """
-    Executes full end-to-end training pipeline for crop yield prediction using weather, 
+    Executes a full end-to-end training pipeline for crop yield prediction using weather, 
     soil, and geographic data.
 
     This class is responsible for:
@@ -137,7 +137,7 @@ class WeatherBasedModelTrainer:
         Supabase and merges them into a single DataFrame.
 
         Weather records form the base table and are left-joined with laboratory chemical and
-        physical soil property tables using soil sample identifiers. This prioritises all weather
+        physical soil property tables using soil sample identifiers. This prioritizes all weather
         observations.
 
         Returns:
@@ -421,7 +421,7 @@ class WeatherBasedModelTrainer:
         regressor. Feature lists are dynamically extended based on derived features to ensure 
         consistent preprocessing.
 
-        This method centralises pipeline assembly to guarantee that identical
+        This method centralizes pipeline assembly to guarantee that identical
         transformations are applied across cross-validation folds. 
         """
         logger.debug("Building preprocessing and modeling pipeline")
@@ -469,8 +469,8 @@ class WeatherBasedModelTrainer:
 
         Steps:
         1. Constructs a group-aware train-test split to prevent leakage across soil samples.
-        2. Defines and fits grid search with GroupKFold CV for hyperamater tuning (R^2 scoring).
-        3. Extracts best estimator and applies fitted preprocessing (imputer + feature derivation)
+        2. Defines and fits grid search with GroupKFold CV for hyperparameter tuning (R^2 scoring).
+        3. Extracts the best estimator and applies fitted preprocessing (imputer + feature derivation)
         to transform training and holdout sets.
         4. Runs diagnostics, including:
             - CV fold metrics (RMSE, MAE, R^2, normalized target variance, high-variance fraction)
